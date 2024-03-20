@@ -3,6 +3,8 @@ import cors from "cors";
 import bodyParser from "body-parser";
 import { db } from "./lib/db.js";
 
+import { Redis } from "@upstash/redis";
+
 const app = express();
 
 app.use(cors());
@@ -16,111 +18,119 @@ db.connect((err) => {
 	console.log("Connected to database");
 });
 
+// Redis implementation
+const client = new Redis({
+	url: process.env.UPSTASH_REDIS_URL,
+	token: process.env.UPSTASH_REDIS_TOKEN,
+});
+
 app.post("/submitCode", (req, res, next) => {
 	console.log("req:", req.body);
 	if (
-		req.body.code === undefined ||
-		req.body.prefLang === undefined ||
-		req.body.stdInput === undefined ||
-		req.body.username === undefined
+		req.body.code === "" ||
+		req.body.prefLang === "" ||
+		req.body.stdInt === "" ||
+		req.body.username === "" ||
+		req.body.submissions === ""
 	) {
+		console.log("req.body.submissions:", req.body.submissions);
 		next("Error in submit");
 	}
+	// const storeInCache = {
+	// 	code: req.body.code,
+	// 	stdInt: req.body.stdInt,
+	// 	prefLang: req.body.prefLang,
+	// 	username: req.body.username,
+	// 	submissions: req.body.submissions,
+	// };
+	// const redisKey = btoa(`${req.body.username}${req.body.code}`);
+	// async function setToRedis() {
+	// 	await client.set(redisKey, storeInCache);
+	// }
+	// setToRedis();
 
 	db.query(
-		`INSERT INTO main.codeEditor (username, code, prefLang, stdInt) VALUES ('${req.body.username}', '${req.body.code}', '${req.body.prefLang}', '${req.body.stdInput}')`,
-		(error, result, fields) => {
+		`INSERT INTO main.codeEditor (username, code, prefLang, stdInt, submissions, timestamp) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+		[
+			req.body.username,
+			req.body.code,
+			req.body.prefLang,
+			req.body.stdInt,
+			req.body.submissions,
+		],
+		(error) => {
 			if (error) {
+				console.log("error:", error);
 				res.status(500).send({ error: "Internal server error" });
 			} else {
 				res.status(200).send({
-					username: req.body.username,
-					code: req.body.code,
-					prefLang: req.body.prefLang,
-					stdInput: req.body.stdInput,
+					message: "Data successfully stored",
 				});
 			}
-			// if (fields) console.log(fields);
 		}
 	);
-
-	// res.send({
-	// 	statusCode: 200,
-	// 	message: "Received",
-	// });
 });
 
-app.get("/data", (req, res, next) => {
-	console.log("Here");
+const cacheFunction = async (req, res, next) => {
+	const { code, username } = req.body;
+	const redisKey = btoa(`${username}${code}`);
+	console.log("redisKey:", redisKey);
 
+	async function getFromRedis() {
+		const result = await client.get(redisKey);
+		// const finalRes = await result;
+		return result;
+	}
+	const data = await getFromRedis();
+	console.log("data:", data);
+	res.status(200).send(data);
+};
+
+app.get("/data", (req, res, next) => {
 	db.query(`SELECT * FROM main.codeEditor`, (err, result, fields) => {
 		if (err) res.send(err);
 		else res.send(result);
 	});
 });
 
-app.delete("/data", (req, res, next) => {
-	// Select the database before executing the query
-	db.query(`USE main`, (err, useResult) => {
-		if (err) {
-			console.log("Error selecting database:", err);
-			res.status(500).send({ error: "Internal server error" });
-			return;
-		}
+app.delete("/data/:id", (req, res, next) => {
+	const idToDelete = req.params.id;
 
-		console.log("Database selected successfully.");
+	// Check if ID is provided
+	if (!idToDelete) {
+		res.status(400).send({
+			error: "ID is missing in the request parameters",
+		});
+		return;
+	}
 
-		// Execute the query to create the temporary table
-		db.query(
-			`CREATE TEMPORARY TABLE tempIds SELECT MAX(id) AS id FROM main.codeEditor`,
-			(err, createResult) => {
-				if (err) {
-					console.log("Error executing CREATE query:", err);
-					res.status(500).send({ error: "Internal server error" });
-					return;
-				}
-
-				console.log("Temporary table created successfully.");
-
-				// Execute the query to delete records based on the temporary table
-				db.query(
-					`DELETE FROM main.codeEditor WHERE id NOT IN (SELECT id FROM tempIds)`,
-					(err, deleteResult) => {
-						if (err) {
-							console.log("Error executing DELETE query:", err);
-							res.status(500).send({
-								error: "Internal server error",
-							});
-							return;
-						}
-
-						console.log("Records deleted successfully.");
-
-						// Execute the query to drop the temporary table
-						db.query(`DROP TABLE tempIds`, (err, dropResult) => {
-							if (err) {
-								console.log("Error executing DROP query:", err);
-								res.status(500).send({
-									error: "Internal server error",
-								});
-								return;
-							}
-
-							console.log(
-								"Temporary table dropped successfully."
-							);
-
-							// Send response after all queries have been executed successfully
-							res.send({
-								message:
-									"All records except one have been deleted successfully.",
-							});
-						});
-					}
+	// Execute the delete query
+	db.query(
+		`DELETE FROM main.codeEditor WHERE id = ?`,
+		[idToDelete],
+		(err, result) => {
+			if (err) {
+				console.log(
+					`Error deleting record with ID ${idToDelete}:`,
+					err
 				);
+				res.status(500).send({ error: "Internal server error" });
+				return;
 			}
-		);
-	});
+
+			if (result.affectedRows === 0) {
+				// No rows affected, indicating no record found with the provided ID
+				res.status(404).send({
+					error: "Record not found with the provided ID",
+				});
+				return;
+			}
+
+			// Record deleted successfully
+			console.log(`Record with ID ${idToDelete} deleted successfully.`);
+			res.send({ message: "Record deleted successfully." });
+		}
+	);
 });
 
 app.listen(9999, () => console.log("Express: 9999"));
