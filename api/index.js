@@ -3,8 +3,8 @@ import cors from "cors";
 import bodyParser from "body-parser";
 import "dotenv/config";
 
-import { db } from "./lib/db.js";
-import { getDataFromRedis, setDataToRedis } from "./lib/redis.js";
+import { db } from "../lib/db.js";
+import { getDataFromRedis, setDataToRedis } from "../lib/redis.js";
 
 const app = express();
 
@@ -22,6 +22,12 @@ db.connect((err) => {
 const asyncHandler = (func) => (req, res, next) => {
 	Promise.resolve(func(req, res, next)).catch(next);
 };
+
+app.get("/", (req, res, next) => {
+	res.send({
+		"/data": "Get all the submissions",
+	});
+});
 
 app.post(
 	"/submitCode",
@@ -139,7 +145,6 @@ app.delete("/data/:id", (req, res, next) => {
 		});
 		return;
 	}
-
 	db.query(
 		`DELETE FROM main.codeEditor WHERE id = ?`,
 		[idToDelete],
@@ -181,6 +186,37 @@ app.delete(
 	})
 );
 
-app.listen(process.env.PORT || 7878, () =>
-	console.log(`Express: ${process.env.PORT ?? 7878}`)
+const server = app.listen(process.env.PORT || 7878, () =>
+	console.log(`Express server running on port ${process.env.PORT}`)
 );
+
+process.on("SIGINT", () => {
+	console.log("Server is shutting down...");
+	server.close(() => {
+		console.log("Express server shut down");
+		db.end((err) => {
+			if (err) {
+				console.error("Error closing database connection:", err);
+				process.exit(1);
+			}
+			console.log("Database connection closed");
+			process.exit(0);
+		});
+	});
+});
+
+process.on("SIGTERM", () => {
+	console.log("Server is shutting down...");
+	server.close(() => {
+		console.log("Express server shut down");
+		db.end((err) => {
+			if (err) {
+				console.error("Error closing database connection:", err);
+				process.exit(1);
+			}
+			console.log("Database connection closed");
+			process.exit(0);
+		});
+	});
+});
+export default app;
